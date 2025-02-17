@@ -1,0 +1,268 @@
+---
+title: "BCB420 Assignment 1"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+bibliography: citations.bib
+csl: biomed-central.csl
+---
+
+# Introduction
+
+Name: Jahin Kabir
+
+Dataset Title: Transcriptomics of Chronic Active Antibody-Mediated Rejection of Human Kidney Allografts and Identification of Intragraft Overexpression of Natural Kill Cell Cytotoxicity Gene Set
+
+GEO Accession Number: GSE232825
+
+Paper title: Transcriptomic signatures of chronic active antibody-mediated rejection deciphered by RNA sequencing of human kidney allografts[@shah2024transcriptomic].
+
+## Motivation for Dataset Selection
+
+Since I work in a transplant immunology lab and am currently working on characterizing natural killer (NK) cell biology in transplant-rejection-specific contexts for BCB430, I am interested in analyzing kidney tissue samples from kidney transplant recipients (this will likely be a comparison between healthy non-rejecting samples and samples from patients undergoing different kinds of rejection).
+
+However, because I do not want my course project to be the exact same as my own research, I have chosen to analyze a bulk RNA-seq dataset, as opposed to the single-cell RNA-seq datasets that I am using for my BCB430 research. This will introduce a novel aspect to my overall research trajectory while also allowing me to explore a field I am already interested in. Moreover, since many modern single-cell techniques are inspired by bulk RNA-seq methodologies, I believe that gaining a deep understanding of bulk analysis is important for thinking carefully about the single-cell approach. Since I have never worked with bulk RNA-seq data before, I therefore think analyzing bulk RNA-seq data may be the most useful for my own learning objectives.
+
+## Dataset Description
+
+Since the study was interested in analyzing the transcriptome of kidney biopsies from patients undergoing chronic active antibody-mediated rejection (CA-ABMR), their data included CA-ABMR (n=15) RNA-seq samples, as well as that from active ABMR (n=7) patients, T-cell mediated rejection (TCMR, n=17) patients, and non-rejection individuals (n=18) as control groups.
+
+For my analysis, I want to focus on differential gene expression between CA-ABMR and non-rejection as the "treatment" and control groups respectively. However, in this notebook, I will clean and normalize the data in all the groups, in case this specific comparison does not yield interesting results and I choose to look at a different combination of disease states (e.g. aABMR vs. CA-ABMR).[@shah2024transcriptomic]
+
+# Getting the data
+
+At first, I attempted to obtain the data in the way demonstrated in the lecture; however, this proved to be problematic since the files supplied in the Supplementary Files by the authors of the paper contained FPKM-normalized counts, making re-normalization difficult (see journal for details). 
+
+Thus, I chose to utilize GEO's new NCBI-Generated RNA-seq count data feature (more info [here](https://www.ncbi.nlm.nih.gov/geo/info/rnaseqcounts.html)), which allows users to download raw counts generated using a harmonized workflow.
+
+First, I use the GEOquery[@davis2007geoquery] package to obtain sample information about our dataset.
+
+```{r, message=FALSE }
+geoid <- "GSE232825"
+gse <- GEOquery::getGEO(GEO = geoid, GSEMatrix = FALSE)
+```
+
+
+```{r, warning=FALSE}
+# Obtaining a summary of the dataset
+gse@header$summary
+```
+As explained above, I obtained the code to download the NCBI-generated RNA-seq raw count data ([https://www.ncbi.nlm.nih.gov/geo/geo2r/?acc=GSE232825](Analyze with GEO2R) from the GEO Webpage for this Series, then click the R Script tab). I have modified their original script to allow for downloading the matrix to local memory, and for checking whether the file is already present in the working directory. We use the data.table package to download. [@datatable2025]
+
+```{r, warning=FALSE}
+# Defining file URL and local file path
+urld <- "https://www.ncbi.nlm.nih.gov/geo/download/?format=file&type=rnaseq_counts"
+filename <- "GSE232825_raw_counts_GRCh38.p13_NCBI.tsv.gz"  # Local file name
+path <- paste(urld, "acc=GSE232825", paste0("file=", filename), sep="&") # Download path
+
+# Check if file exists locally; download only if needed
+if (!file.exists(filename)) {
+  message("File not found locally. Downloading...")
+  download.file(path, destfile = filename, mode = "wb")
+} else {
+  message("File already exists locally. Skipping download.")
+}
+
+# Read the table in as a matrix
+raw_counts <- as.matrix(data.table::fread(filename, header = TRUE, colClasses = "integer"), rownames = 1)
+head(raw_counts)
+```
+
+Note that the number of samples downloaded here in this matrix deviates from the number of sample the dataset is expected to contain (57):
+
+```{r}
+length(colnames(raw_counts))
+```
+
+I am not sure why this is, since the sample information obtained from `gse@gsms` has information for all 57 samples and so does the normalized counts matrix obtained from the Supplementary Files. For the purposes of my analysis, I have chosen to go with the 56 samples -- the next section which summarizes sample information will thus have to account for this discrepancy.
+
+# Summarizing sample information and treatment group sample sizes
+
+Coverage of the dataset:
+```{r}
+dim(raw_counts)
+```
+
+
+```{r, warning=FALSE}
+list_of_samples <- gse@gsms
+samples_type <- do.call(rbind, 
+                        lapply(list_of_samples, 
+                               FUN=function(x){ c(x@header$title, 
+                                                  x@header$characteristics_ch1)
+                                 }
+                               )
+                        )
+head(samples_type)
+```
+
+```{r, warning=FALSE}
+# Renaming the colnames and cleaning up entries
+colnames(samples_type) <- c("sample_number", "tissue", "cell_type", "genotype", "treatment")
+samples_type[,'tissue'] <- gsub(samples_type[,'tissue'], pattern = "tissue: ", replacement = "")
+samples_type[, 'cell_type'] <- gsub(samples_type[, 'cell_type'], pattern = "cell type: ", replacement = "")
+samples_type[, 'genotype'] <- gsub(samples_type[, 'genotype'], pattern = "genotype: ", replacement = "")
+samples_type[, 'treatment'] <- gsub(samples_type[, 'treatment'], pattern = "treatment: ", replacement = "")
+```
+
+Comparing the sample list here with that in the downloaded counts matrix, it seems like the sample "47A_S44" (GSM7384051) is the one that is missing from our downloaded matrix, so we will have to remove that from the sample info table.
+
+```{r, warning=FALSE}
+sample_type_dt <- data.table::data.table(samples_type)
+sample_type_dt_removed <- sample_type_dt[sample_number != "47A_S44"] # removing the missing sample
+sample_type_dt_removed[, .(count = .N), by = sample_type_dt_removed$treatment] # summarizing sample sizes
+```
+
+```{r, warning=FALSE}
+# minimal number of samples - want to compare caABMR (n=14) and No Rejection (n=18),
+# so choosing the minimum of the two sample sizes
+min_num_samples <- 14
+# get rid of low counts
+keep = rowSums(edgeR::cpm(raw_counts) >1) > min_num_samples
+filtered_raw_counts= raw_counts[keep,]
+dim(filtered_raw_counts)
+```
+
+After filtering, the coverage of the new counts matrix is 18331, which is less than half of that of the original dataset (39376). This filtering might be too stringent, but we will stay with this for now and adjust later if needed.
+
+```{r, warning=FALSE}
+# Defining functions for visualizing the spread of data
+
+# Box plot (as shown in lecture)
+plot_boxplot <- function(counts) {
+  data2plot <- log2(counts)
+  boxplot(data2plot, xlab = "Samples", ylab = "log2 TPM",
+          las = 2, cex = 0.5, cex.lab = 0.5,
+          cex.axis = 0.5, main = "RNASeq Samples")
+  abline(h = median(apply(data2plot, 2, median)),
+         col = "green", lwd = 0.6, lty = "dashed")
+}
+
+# Density plot (as shown in lecture)
+density_plot <- function(counts) {
+  data2plot <- log2(counts)
+  counts_density <- apply(log2(counts), 2, density)
+  # Calculate the limits across all the samples
+  xlim <- 0; ylim <- 0
+  for (i in 1:length(counts_density)) {
+  xlim <- range(c(xlim, counts_density[[i]]$x));
+  ylim <- range(c(ylim, counts_density[[i]]$y))
+  }
+  cols <- rainbow(length(counts_density))
+  ltys <- rep(1, length(counts_density))
+  # Plot the first density plot to initialize the plot
+  plot(counts_density[[1]], xlim=xlim, ylim=ylim, type="n", ylab="Smoothing density of log2-CPM", main="", cex.lab = 0.85)
+  # Plot each line
+  for (i in 1:length(counts_density)) {
+    lines(counts_density[[i]], col=cols[i], lty=ltys[i])
+  }
+  # Create legend
+  legend("topright", colnames(data2plot),
+  col=cols, lty=ltys, cex=0.75,
+  border ="blue", text.col = "green4",
+  merge = TRUE, bg = "gray90")
+}
+```
+
+```{r, warning=FALSE}
+plot_boxplot(filtered_raw_counts)
+```
+The density plots below before and after filtering shows that filtering helps to clean up a lot of the "messy" data at the lower end of the curve.
+
+### Before filtering
+
+```{r, warning=FALSE}
+density_plot(raw_counts)
+```
+### After filtering
+
+```{r, warning=FALSE}
+density_plot(filtered_raw_counts)
+```
+
+# Normalization
+To normalize, we will use the built-in counts per million (CPM) normalization in the edgeR package, which scales raw counts by the total library size to account for differences in sequencing depth. [@chen2024edger]
+
+```{r, echo=FALSE}
+d = edgeR::DGEList(counts=filtered_raw_counts, group=sample_type_dt_removed$treatment)
+
+normalized_counts <- edgeR::cpm(d)
+```
+
+### Plots after normalization
+
+```{r, warning=FALSE}
+plot_boxplot(normalized_counts)
+```
+```{r, warning=FALSE}
+density_plot(normalized_counts)
+```
+
+# MDS Plot
+
+We use the `plotMDS()` function from the Limma package [@ritchie2015limma]:
+```{r, warning=FALSE}
+limma::plotMDS(d, labels=NULL, pch = 1,
+               col = c("darkgreen","blue", "red", "yellow")[factor(sample_type_dt_removed$treatment)])
+legend("topright", legend=levels(factor(sample_type_dt_removed$treatment)), pch=c(1), col=c("darkgreen","blue", "red", "yellow"),title="Class", bty = 'n', cex = 0.75)
+```
+We see that the groups separate quite cleanly, especially the No Rejection and caABMR groups, which are the ones we are interested in for our analysis.
+
+# Mapping to HUGO symbols
+
+To annotate our counts matrix with HUGO gene symbols, we will be using the Human gene annotation table that is provided with all NCBI-generated RNA-seq counts matrices. 
+
+## Downloading the annotation table
+
+```{r}
+# Define file URL and local file path
+filename <- "Human.GRCh38.p13.annot.tsv.gz"  # Local file name
+path <- "https://www.ncbi.nlm.nih.gov/geo/download/?format=file&type=rnaseq_counts&file=Human.GRCh38.p13.annot.tsv.gz"
+
+# Check if file exists locally; download only if needed
+if (!file.exists(filename)) {
+  message("File not found locally. Downloading...")
+  download.file(path, destfile = filename, mode = "wb")
+} else {
+  message("File already exists locally. Skipping download.")
+}
+
+# Read the file and convert to matrix
+annotation_table <- as.matrix(data.table::fread(filename, header = TRUE, colClasses = "character"), rownames = 1)
+dim(annotation_table)
+```
+
+# Combining counts matrix with annotation table
+
+```{r}
+# Merge counts table with annotation by Gene ID
+annotation_table_df <- as.data.frame(annotation_table)
+mapping_to_hugo <- annotation_table[, "Symbol"]
+merged_counts <- merge(normalized_counts, mapping_to_hugo, 
+                        by.x = "row.names", by.y = "row.names", all.x = TRUE)
+head(merged_counts)
+```
+
+# Checking the mappings
+```{r}
+mapping_to_hugo_unique <- stack(mapping_to_hugo)
+mapping_to_hugo_unique <- unique(mapping_to_hugo_unique)
+colnames(mapping_to_hugo_unique) <- c("Symbol", "GeneID")
+
+duplicate_gene_mappings <- mapping_to_hugo_unique[duplicated(mapping_to_hugo_unique$GeneID) | duplicated(mapping_to_hugo_unique$GeneID, fromLast = TRUE), ]
+duplicate_gene_mappings
+
+gene_ids <- rownames(normalized_counts)
+length(unique(gene_ids))
+length(gene_ids)
+
+any(is.na(merged_counts$y))
+any(merged_counts$y == "")
+
+symbols <- merged_counts$y
+length(unique(symbols))
+length(symbols)
+```
+
+We have checked that none of the genes map to more than one HUGO symbol, that all the genes have a corresponding HUGO symbol, and there are no symbols that map to more than one gene identifier in our dataset.
