@@ -112,8 +112,14 @@ Comparing the sample list here with that in the downloaded counts matrix, it see
 sample_type_dt <- data.table::data.table(samples_type)
 sample_type_dt_removed <- sample_type_dt[sample_number != "47A_S44"] # removing the missing sample
 sample_type_dt_removed[, .(count = .N), by = sample_type_dt_removed$treatment] # summarizing sample sizes
+sample_type_dt_removed
 ```
-
+```{r}
+sample_to_accession <- data.table::data.table(samples_type, keep.rownames = TRUE)
+sample_to_accession_removed <- sample_to_accession[sample_number != "47A_S44"] # removing the missing sample
+colnames(sample_to_accession_removed)[1:2] <- c("sample_number", "title")
+write.csv(sample_to_accession_removed, "Data/Processed/accession_mapping.csv")
+```
 ```{r, warning=FALSE}
 # minimal number of samples - want to compare caABMR (n=14) and No Rejection (n=18),
 # so choosing the minimum of the two sample sizes
@@ -242,6 +248,8 @@ mapping_to_hugo <- annotation_table[, "Symbol"]
 merged_counts <- merge(normalized_counts, mapping_to_hugo, 
                         by.x = "row.names", by.y = "row.names", all.x = TRUE)
 head(merged_counts)
+rownames(merged_counts) <- merged_counts$y
+norm_counts_final <- merged_counts[, 2:57]
 ```
 
 # Checking the mappings
@@ -263,6 +271,10 @@ any(merged_counts$y == "")
 symbols <- merged_counts$y
 length(unique(symbols))
 length(symbols)
+```
+
+```{r}
+saveRDS(norm_counts_final, "Data/Processed/final_counts_GSE232825.rds")
 ```
 
 We have checked that none of the genes map to more than one HUGO symbol, that all the genes have a corresponding HUGO symbol, and there are no symbols that map to more than one gene identifier in our dataset.

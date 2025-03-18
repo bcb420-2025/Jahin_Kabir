@@ -1,0 +1,282 @@
+---
+title: "BCB420 Assignment 2"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+bibliography: citations.bib
+csl: biomed-central.csl
+---
+
+# Assignment 2: Differential Gene Expression and Preliminary ORA
+
+## Introduction: Preliminary Data Exploration
+
+### Description of Dataset
+
+GEO Accession Number: GSE232825
+
+Dataset Title: Transcriptomics of Chronic Active Antibody-Mediated Rejection of Human Kidney Allografts and Identification of Intragraft Overexpression of Natural Kill Cell Cytotoxicity Gene Set
+
+Paper title: Transcriptomic signatures of chronic active antibody-mediated rejection deciphered by RNA sequencing of human kidney allografts[@shah2024transcriptomic].
+
+In this assignment, I will be conducting differential gene expression analysis on the dataset normalized and processed in the previous assignment (dataset source and paper title has been described above). In A1, I utilized GEO's new NCBI-Generated RNA-seq count data feature to download the raw counts data from GEO Accession Number GSE232825. I retrieved the code to download the NCBI-generated RNA-seq raw count data from the GEO Webpage for this Series [https://www.ncbi.nlm.nih.gov/geo/geo2r/?acc=GSE232825](Analyze with GEO2R), (click the R Script tab). 
+
+### Data Normalization and Separation Summary
+
+#### Summary Statistics
+
+First, we load the data in from the output of A1. We also load in the table specifying the disease type (caABMR vs. No Rejection vs. TCMR) for each sample. **Note: my initial submission of A1 did not include code to save this counts data to my repository, and so A1 has been modified to include code for this.**
+
+```{r, message=FALSE, warning=FALSE}
+processed_counts <- readRDS("Data/Processed/final_counts_GSE232825.rds")
+sample_type <- read.csv("Data/Processed/accession_mapping.csv")
+```
+
+```{r, warning=FALSE}
+# Defining functions for visualizing the spread of data
+
+# Box plot (as shown in lecture)
+plot_boxplot <- function(counts) {
+  data2plot <- log2(counts)
+  boxplot(data2plot, xlab = "Samples", ylab = "log2 TPM",
+          las = 2, cex = 0.5, cex.lab = 0.5,
+          cex.axis = 0.5, main = "RNASeq Samples")
+  abline(h = median(apply(data2plot, 2, median)),
+         col = "green", lwd = 0.6, lty = "dashed")
+}
+
+# Density plot (as shown in lecture)
+density_plot <- function(counts) {
+  data2plot <- log2(counts)
+  counts_density <- apply(log2(counts), 2, density)
+  # Calculate the limits across all the samples
+  xlim <- 0; ylim <- 0
+  for (i in 1:length(counts_density)) {
+  xlim <- range(c(xlim, counts_density[[i]]$x));
+  ylim <- range(c(ylim, counts_density[[i]]$y))
+  }
+  cols <- rainbow(length(counts_density))
+  ltys <- rep(1, length(counts_density))
+  # Plot the first density plot to initialize the plot
+  plot(counts_density[[1]], xlim=xlim, ylim=ylim, type="n", ylab="Smoothing density of log2-CPM", main="", cex.lab = 0.85)
+  # Plot each line
+  for (i in 1:length(counts_density)) {
+    lines(counts_density[[i]], col=cols[i], lty=ltys[i])
+  }
+  # Create legend
+  legend("topright", colnames(data2plot),
+  col=cols, lty=ltys, cex=0.75,
+  border ="blue", text.col = "green4",
+  merge = TRUE, bg = "gray90")
+}
+```
+
+```{r, warning=FALSE, fig.cap="Figure 1. Box-and-whisker plot showing mean log2(TPM) values of each sample, with their standard deviation."}
+plot_boxplot(processed_counts)
+```
+
+```{r, warning=FALSE, fig.cap="Figure 2. Density plot showing spread of normalized count data."}
+density_plot(processed_counts)
+```
+
+From the plots above, we see that the means of the counts for each sample are aligned, and that the counts approximate a normal distribution. Therefore, we can proceed with downstream analysis as our count data appear to be sufficiently normalized.
+
+#### Data Separation
+
+Before we move on, we would also like to see how our samples separate based on gene expression. To this end, we will use edgeR's `DGElist()` function and limma's `plotMDS()` function to create an MDS plot that visualizes the separation of counts data from each sample based on gene expression [@chen2024edger, @ritchie2015limma].
+
+```{r, fig.cap="Figure 3. MDS plot showing separation of samples, coloured by disease state."}
+d = edgeR::DGEList(counts=processed_counts, group=sample_type$treatment)
+
+limma::plotMDS(d,labels=NULL, pch = 1, 
+               col = c("darkgreen","blue", "red", "yellow")[factor(sample_type$treatment)])
+legend("topright", legend=levels(factor(sample_type$treatment)), 
+       pch=c(1), col= c("darkgreen","blue", "red", "yellow"), title="Disease State", 
+       bty = 'n', cex = 0.75)
+```
+
+### Subsetting the Count Matrix to caABMR and Non-Rejection Groups
+
+Because we want to focus our analysis to caABMR vs. Non-Rejection, we will subset our counts matrix and sample metadata to only include these samples.
+
+```{r}
+counts_caABMR_healthy <- processed_counts[, sample_type$sample_number[which(sample_type$treatment == "caABMR" | sample_type$treatment == "No Rejection")]]
+samples_caABMR_healthy <- sample_type[which(sample_type$treatment == "caABMR" | sample_type$treatment == "No Rejection"), ]
+```
+
+## Differential Expression Analysis with edgeR
+
+We will now conduct differential expression analysis using EdgeR's [@chen2024edger]. We picked edgeR over limma because edgeR is more suited for handling RNA-seq data as it models RNA-seq counts using a negative binomial distribution, which is closer to true RNA-seq count distribution. Our model design only includes a single coefficient for the "treatment"/"genotype" variable (they are identical and interchangeable in our sample table), since we saw in our MDS plot that the samples separate by treatment type (caABMR vs. non-rejection). While it would be good to include other potentially confounding variables in our model, such as time after transplant when the biopsy samples were taken, this information is not available in our sample information table. Further analysis of the data can include a comprehensive analysis of factors potentially contributing to observed gene expression differences, but for now, we will focus on sample separation based on disease state.
+
+We use the quasi-likelihood F-test (`glmQLFit()` and `glmQLFTest()`) to conduct DE analysis, since it better reflects the uncertainty in calculated dispersion values of genes and therefore produces more robust results. [@chen2020edger] This step calculates p-values for each differentially expressed gene identified.
+
+```{r, fig.cap="Table 1. Top differentially expressed genes in caABMR vs. non-rejection"}
+model_design <- model.matrix(~ samples_caABMR_healthy$genotype)
+d <- edgeR::DGEList(counts=counts_caABMR_healthy, group = samples_caABMR_healthy$genotype)
+d <- edgeR::estimateDisp(d, model_design)
+
+fit <- edgeR::glmQLFit(d, model_design)
+
+qlf.caABMR_vs_healthy <- edgeR::glmQLFTest(fit, coef='samples_caABMR_healthy$genotypeNo Rejection')
+knitr::kable(edgeR::topTags(qlf.caABMR_vs_healthy), type="html",row.names =
+TRUE)
+```
+
+We then adjusted p-values using the Benjamini-Hochberg (BH) method for multiple testing correction, which reduces the false discovery rate (FDR), and sorted by p value.  
+
+```{r}
+qlf_output_hits <- edgeR::topTags(qlf.caABMR_vs_healthy, sort.by = "PValue", adjust.method = "BH", n = nrow(counts_caABMR_healthy))
+```
+
+We can see that there are `length(which(qlf_output_hits$table$PValue < 0.05))` genes which are statistically significant if we use a cutoff of `pval < 0.05`, while there are fewer genes (`length(which(qlf_output_hits$table$FDR < 0.05))`) if we use the BH method to correct p values and set a threshold of FDR < 0.05.
+
+### Volcano Plots
+
+Next, we plot volcano plots to visualize the top 30 differentially expressed genes in caABMR vs. no rejection.
+
+**Note: We calculate a "neglogFC" to produce our plot so that genes upregulated in the caABMR group is shown to the right of the plot.**
+
+```{r, fig.cap="Figure 4. Volcano plot showing differentially expressed genes between caABMR and non-rejecting samples, with the top 30 DE genes (by p value) labelled.", fig.width=13, fig.height=15}
+library(tidyverse)
+library(RColorBrewer)
+library(ggrepel)
+
+qlf_output_hits$table$neglogFC <- - qlf_output_hits$table$logFC
+
+qlf_output_hits$table$DE <- "No"
+qlf_output_hits$table$DE[qlf_output_hits$table$neglogFC > 0.6 & qlf_output_hits$table$FDR < 0.05] <- "UP"
+qlf_output_hits$table$DE[qlf_output_hits$table$neglogFC < -0.6 & qlf_output_hits$table$FDR < 0.05] <- "DOWN"
+
+top30degs <- rownames(head(qlf_output_hits$table[order(qlf_output_hits$table$FDR), ], 30))
+
+qlf_output_hits$table$top30 <- ifelse(rownames(qlf_output_hits$table) %in% top30degs, rownames(qlf_output_hits$table), NA)
+
+qlf_output_hits
+
+ggplot(data = qlf_output_hits, aes(x = neglogFC, y = -log10(FDR), col = DE, label = top30)) + 
+  geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = "dashed") + 
+  geom_hline(yintercept = 0.5, col = "gray", linetype = "dashed") + 
+  geom_point() + 
+  scale_color_manual(values = c("blue", "grey", "red"), 
+                     labels = c("Downregulated", "Not significant", "Upregulated")) + 
+  geom_text_repel(max.overlaps = Inf)
+```
+Notably, we see that several chemokines involved in inflammatory response (CCL3, CCL4), cytokine receptors (IL12 receptor IL12RB) known to contribute to anti-transplant immune response are upregulated in the caABMR group versus non-rejecting tissue. It is also noteworthy that most of the top statistically significant genes are upregulated in caABMR, and not in no-rejection (none of the top 30 DE genes belong to the no-rejection group). This could suggest that the altered immmune response contributing to caABMR mostly involves the upregulation of genes and involves downregulation to a lesser extent. 
+
+### Heatmap Representation
+
+Next, we will plot a heatmap of our top differentially expressed genes to observe whether our samples cluster according to disease state.
+
+```{r, fig.cap="Figure 5. Heatmap representation of differentially expressed genes, with dendograms showing clustering of cells and genes.", fig.width=13, fig.height=15}
+library(ComplexHeatmap)
+library(circlize)
+
+heatmap_matrix <- counts_caABMR_healthy
+
+top_hits <- rownames(qlf_output_hits$table)[qlf_output_hits$table$PValue<0.05]
+
+heatmap_matrix_tophits <- t(scale(t(heatmap_matrix[which(rownames(heatmap_matrix)
+                                                         %in% top_hits), ])))
+
+if(min(heatmap_matrix_tophits) == 0){
+  heatmap_col = colorRamp2(c( 0, max(heatmap_matrix_tophits)), c( "white", "red"))
+} else {
+  heatmap_col = colorRamp2(c(min(heatmap_matrix_tophits), 0,
+                             max(heatmap_matrix_tophits)), c("blue", "white", "red"))}
+
+unique_patients <- unique(samples_caABMR_healthy$title)
+unique_patientscolors <- rainbow(n = length(unique_patients))
+names(unique_patientscolors) <- unique_patients
+unique_treatments <- unique(samples_caABMR_healthy$treatment)
+unique_treatmentcols <- rainbow(n = length(unique_treatments))
+names(unique_treatmentcols) <- unique_treatments
+
+ha_pat <- HeatmapAnnotation(df = data.frame(
+  patients = samples_caABMR_healthy$title,
+  treatments = samples_caABMR_healthy$treatment), 
+  col = list(
+    patients = unique_patientscolors,
+    treatments = unique_treatmentcols), 
+  show_legend = TRUE)
+
+current_heatmap <- Heatmap(as.matrix(heatmap_matrix_tophits), 
+                           top_annotation = ha_pat, 
+                           cluster_rows = TRUE, 
+                           cluster_columns = TRUE, 
+                           show_row_dend = TRUE, 
+                           show_column_dend = TRUE, 
+                           col=heatmap_col, 
+                           show_column_names = FALSE, 
+                           show_row_names = FALSE, 
+                           show_heatmap_legend = TRUE, 
+                           column_title = ("Top hits caABMR vs Non-rejection"))
+
+current_heatmap
+```
+
+We see that our heatmap gives us mixed results: on one hand, broadly speaking, there is a clustering of certain genes that are distinctly upregulated in the caABMR group, while there is a smaller set of genes that distinctly mark the non-rejection samples. However, there is a group of samples in the caABMR group which seem to upregulate a distinct set of genes and do **NOT** upregulate most of the genes in the caABMR upregulated set and, judging by the dendogram showing sample clustering, seem to cluster with some of the non rejection samples. It would be interesting to assess whether this clustering pattern correlates with any other factor that we may have not looked into.
+
+## Preliminary ORA
+
+We next wanted to conduct some preliminary thresholded ORA to observe if there is an enrichment in specific pathway gene sets in our upregulated/downregulated/combined genes.
+
+```{r}
+# getting sets of upregulated and downregulated genes and combined gene set
+upregulated_genes <- rownames(qlf_output_hits$table[
+  which(qlf_output_hits$table$PValue < 0.05 & qlf_output_hits$table$logFC > 1.1),])
+downregulated_genes <- rownames(qlf_output_hits$table[
+  which(qlf_output_hits$table$PValue < 0.05 & qlf_output_hits$table$logFC < -1.1),])
+combined_genes <- rownames(qlf_output_hits$table[
+  which(qlf_output_hits$table$PValue < 0.05 & (qlf_output_hits$table$logFC < -1.1 |
+                                                 qlf_output_hits$table$logFC > 1.1)),])
+```
+
+#### Combined Gene Set
+
+```{r}
+gprofiler_output <- gprofiler2::gost(query = combined_genes, 
+                                     significant = TRUE,
+                                     exclude_iea = TRUE,
+                                     correction_method = "fdr", 
+                                     organism = "hsapiens", 
+                                     source = c("GO:BP", "GO:MF", "KEGG"))
+
+gprofiler_comb <- as.data.frame(gprofiler_output$result)
+gprofiler_comb
+```
+
+#### Upregulated Gene Set
+
+```{r}
+gprofiler_output <- gprofiler2::gost(query = upregulated_genes, 
+                                     significant = TRUE,
+                                     exclude_iea = TRUE,
+                                     correction_method = "fdr", 
+                                     organism = "hsapiens", 
+                                     source = c("GO:MF", "GO:BP", "KEGG"))
+
+gprofiler_down <- as.data.frame(gprofiler_output$result)
+knitr::kable(gprofiler_down, type="html")
+```
+
+#### Downregulated Gene Set
+
+
+```{r}
+gprofiler_output <- gprofiler2::gost(query = upregulated_genes, 
+                                     significant = TRUE,
+                                     exclude_iea = TRUE,
+                                     correction_method = "fdr", 
+                                     organism = "hsapiens", 
+                                     source = c("GO:MF", "GO:BP", "KEGG"))
+
+gprofiler_down <- as.data.frame(gprofiler_output$result)
+knitr::kable(gprofiler_down, type="html")
+```
+
+We see that there are 
+
+
+## References
+
