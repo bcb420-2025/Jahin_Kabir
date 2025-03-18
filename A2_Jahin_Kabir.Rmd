@@ -22,6 +22,15 @@ Paper title: Transcriptomic signatures of chronic active antibody-mediated rejec
 
 In this assignment, I will be conducting differential gene expression analysis on the dataset normalized and processed in the previous assignment (dataset source and paper title has been described above). In A1, I utilized GEO's new NCBI-Generated RNA-seq count data feature to download the raw counts data from GEO Accession Number GSE232825. I retrieved the code to download the NCBI-generated RNA-seq raw count data from the GEO Webpage for this Series [https://www.ncbi.nlm.nih.gov/geo/geo2r/?acc=GSE232825](Analyze with GEO2R), (click the R Script tab). 
 
+```{r, include=FALSE}
+# if(!requireNamespace('tidyverse', quietly=TRUE)){
+#   install.packages("tidyverse")
+# }
+if(!requireNamespace('ggrepel', quietly=TRUE)){
+  devtools::install_version('ggrepel', version='0.9.6', repos="http://cran.us.r-project.org")
+}
+```
+
 ### Data Normalization and Separation Summary
 
 #### Summary Statistics
@@ -133,12 +142,11 @@ We can see that there are `length(which(qlf_output_hits$table$PValue < 0.05))` g
 
 ### Volcano Plots
 
-Next, we plot volcano plots to visualize the top 30 differentially expressed genes in caABMR vs. no rejection.
+Next, we plot volcano plots to visualize the top 30 differentially expressed genes in caABMR vs. no rejection. To plot the points, we use ggplot2, ggrepel, and RColorBrewer for coloring [@ggrepel, @ggplot2, @Neuwirth2002-wz].
 
 **Note: We calculate a "neglogFC" to produce our plot so that genes upregulated in the caABMR group is shown to the right of the plot.**
 
-```{r, fig.cap="Figure 4. Volcano plot showing differentially expressed genes between caABMR and non-rejecting samples, with the top 30 DE genes (by p value) labelled.", fig.width=13, fig.height=15}
-library(tidyverse)
+```{r, fig.cap="Figure 4. Volcano plot showing differentially expressed genes between caABMR and non-rejecting samples, with the top 30 DE genes (by p value) labelled.", fig.width=13, fig.height=12}
 library(RColorBrewer)
 library(ggrepel)
 
@@ -149,20 +157,24 @@ qlf_output_hits$table$DE[qlf_output_hits$table$neglogFC > 0.6 & qlf_output_hits$
 qlf_output_hits$table$DE[qlf_output_hits$table$neglogFC < -0.6 & qlf_output_hits$table$FDR < 0.05] <- "DOWN"
 
 top30degs <- rownames(head(qlf_output_hits$table[order(qlf_output_hits$table$FDR), ], 30))
+nk.genes <- c("KLRB1", "KLRD1", "KLRC1", "CD160", "GZMB", "GNLY")
 
-qlf_output_hits$table$top30 <- ifelse(rownames(qlf_output_hits$table) %in% top30degs, rownames(qlf_output_hits$table), NA)
+qlf_output_hits$table$top30 <- ifelse(rownames(qlf_output_hits$table) %in% c(top30degs, nk.genes), rownames(qlf_output_hits$table), NA)
 
-qlf_output_hits
-
-ggplot(data = qlf_output_hits, aes(x = neglogFC, y = -log10(FDR), col = DE, label = top30)) + 
+ggplot2::ggplot(data = qlf_output_hits, aes(x = neglogFC, y = -log10(FDR), col = DE, label = top30)) + 
   geom_vline(xintercept = c(-0.6, 0.6), col = "gray", linetype = "dashed") + 
-  geom_hline(yintercept = 0.5, col = "gray", linetype = "dashed") + 
+  geom_hline(yintercept = -log10(0.05), col = "gray", linetype = "dashed") + 
   geom_point() + 
   scale_color_manual(values = c("blue", "grey", "red"), 
                      labels = c("Downregulated", "Not significant", "Upregulated")) + 
   geom_text_repel(max.overlaps = Inf)
 ```
-Notably, we see that several chemokines involved in inflammatory response (CCL3, CCL4), cytokine receptors (IL12 receptor IL12RB) known to contribute to anti-transplant immune response are upregulated in the caABMR group versus non-rejecting tissue. It is also noteworthy that most of the top statistically significant genes are upregulated in caABMR, and not in no-rejection (none of the top 30 DE genes belong to the no-rejection group). This could suggest that the altered immmune response contributing to caABMR mostly involves the upregulation of genes and involves downregulation to a lesser extent. 
+
+Notably, we see that several chemokines involved in inflammatory response (CCL3, CCL4), cytokine receptors (IL12 receptor IL12RB) known to contribute to anti-transplant immune response are upregulated in the caABMR group versus non-rejecting tissue. 
+
+Apart from the top 30 differentially expressed genes, I also included key NK genes (KLRB1, KLRC1, KLRD1, CD160) and cytotoxic effectors (GZMB, GNLY) in my volcano plot, since these were shown to be upregulated in caABMR vs. non-rejection by the authors [@shah2024transcriptomic]. We see that in our results, these genes are significantly upregulated in the caABMR group, indicating that there is an activation of NK cytotoxic pathways during caABMR.
+
+It is also noteworthy that most of the top statistically significant genes are upregulated in caABMR, and not in no-rejection (none of the top 30 DE genes belong to the no-rejection group). This could suggest that the altered immmune response contributing to caABMR mostly involves the upregulation of genes and involves downregulation to a lesser extent. 
 
 ### Heatmap Representation
 
@@ -177,7 +189,7 @@ heatmap_matrix <- counts_caABMR_healthy
 top_hits <- rownames(qlf_output_hits$table)[qlf_output_hits$table$PValue<0.05]
 
 heatmap_matrix_tophits <- t(scale(t(heatmap_matrix[which(rownames(heatmap_matrix)
-                                                         %in% top_hits), ])))
+                                                         %in% c(top_hits)), ])))
 
 if(min(heatmap_matrix_tophits) == 0){
   heatmap_col = colorRamp2(c( 0, max(heatmap_matrix_tophits)), c( "white", "red"))
@@ -221,12 +233,20 @@ We see that our heatmap gives us mixed results: on one hand, broadly speaking, t
 
 We next wanted to conduct some preliminary thresholded ORA to observe if there is an enrichment in specific pathway gene sets in our upregulated/downregulated/combined genes.
 
+For ORA, we chose to use `gprofiler2` since it contains up-to-date gene sets [@liis2020gprofiler2]. This provides an R interface to the web-based tool `GProfiler` [@raudvere2019g]. We focus on the `GO:BP` and `KEGG` pathways since they contain important immune-related pathways and disease-associated pathways that might be relevant for our analysis, and `GO:MF` because they might shed light on specific molecular pathways that mediate ABMR.
+
+**Note:**
+
+**1. We use a threshold of `|logFC| > 1.1` to find significantly upregulated/downregulated genes. The reason we use 1.1 and not 0 is because we want to focus on genes that are differentially expressed at a strong enough magnitude since these are more likely to have stronger biological effects.**
+
+**2. We call genes with `logFC < - 1.1` "upregulated" because these are the genes that are downregulated in the "No Rejection" samples and are therefore upregulated in the caABMR group, and I want to set the caABMR samples as my "positive" set.**
+
 ```{r}
 # getting sets of upregulated and downregulated genes and combined gene set
 upregulated_genes <- rownames(qlf_output_hits$table[
-  which(qlf_output_hits$table$PValue < 0.05 & qlf_output_hits$table$logFC > 1.1),])
-downregulated_genes <- rownames(qlf_output_hits$table[
   which(qlf_output_hits$table$PValue < 0.05 & qlf_output_hits$table$logFC < -1.1),])
+downregulated_genes <- rownames(qlf_output_hits$table[
+  which(qlf_output_hits$table$PValue < 0.05 & qlf_output_hits$table$logFC > 1.1),])
 combined_genes <- rownames(qlf_output_hits$table[
   which(qlf_output_hits$table$PValue < 0.05 & (qlf_output_hits$table$logFC < -1.1 |
                                                  qlf_output_hits$table$logFC > 1.1)),])
@@ -235,6 +255,7 @@ combined_genes <- rownames(qlf_output_hits$table[
 #### Combined Gene Set
 
 ```{r}
+library(dplyr)
 gprofiler_output <- gprofiler2::gost(query = combined_genes, 
                                      significant = TRUE,
                                      exclude_iea = TRUE,
@@ -243,7 +264,8 @@ gprofiler_output <- gprofiler2::gost(query = combined_genes,
                                      source = c("GO:BP", "GO:MF", "KEGG"))
 
 gprofiler_comb <- as.data.frame(gprofiler_output$result)
-gprofiler_comb
+knitr::kable(gprofiler_comb, type="html") %>% 
+  kableExtra::scroll_box(width = "600px", height = "200px")
 ```
 
 #### Upregulated Gene Set
@@ -256,15 +278,18 @@ gprofiler_output <- gprofiler2::gost(query = upregulated_genes,
                                      organism = "hsapiens", 
                                      source = c("GO:MF", "GO:BP", "KEGG"))
 
-gprofiler_down <- as.data.frame(gprofiler_output$result)
-knitr::kable(gprofiler_down, type="html")
+gprofiler_up <- as.data.frame(gprofiler_output$result)
+knitr::kable(gprofiler_up, type="html") %>% 
+  kableExtra::scroll_box(width = "600px", height = "200px")
 ```
+
+Notably, we see that the pathways found to be enriched in the upregulated gene set is similar to that in the combined gene set, which mirrors our differential gene expression analysis where we saw that most of the differentially expressed genes were upregulated in caABMR. These genes are mostly immune-related pathways from `GO:BP`, which reflects the elevated immune response genes that are activated during chronic rejection.
 
 #### Downregulated Gene Set
 
 
 ```{r}
-gprofiler_output <- gprofiler2::gost(query = upregulated_genes, 
+gprofiler_output <- gprofiler2::gost(query = downregulated_genes, 
                                      significant = TRUE,
                                      exclude_iea = TRUE,
                                      correction_method = "fdr", 
@@ -272,11 +297,26 @@ gprofiler_output <- gprofiler2::gost(query = upregulated_genes,
                                      source = c("GO:MF", "GO:BP", "KEGG"))
 
 gprofiler_down <- as.data.frame(gprofiler_output$result)
-knitr::kable(gprofiler_down, type="html")
+knitr::kable(gprofiler_down, type="html") %>% 
+  kableExtra::scroll_box(width = "600px", height = "200px")
 ```
 
-We see that there are 
+We see that there are fewer enriched gene sets when focussing on the genes downregulated in non-rejecting samples, which is again expected from our DE results before. Notably, the enriched gene sets are all from the "GO:MF" database and not from the "GO:BP" database, unlike the upregulated and combined results.  In fact, when we focus on only the `GO:BP` database for ORA, we see that `gprofiler` does not return any significantly enriched gene sets. 
 
+```{r}
+gprofiler_output <- gprofiler2::gost(query = downregulated_genes, 
+                                     significant = TRUE,
+                                     exclude_iea = TRUE,
+                                     correction_method = "fdr", 
+                                     organism = "hsapiens", 
+                                     source = c("GO:BP"))
+```
+
+## Interpretation
+
+From our DE and ORA results, we see that there is an upregulation immune-related pathways and genes, particularly NK-cell-related and cytotoxic genes, which aligns with published literature on transplant rejection [@garcesAntibodyMediatedRejectionReview2017]. 
+
+We have seen that the caABMR and non-rejecting samples separate distinctly based on gene expression, and the upregulated genes in caABMR are enriched in cytotoxic genes, pro-inflammatory molecules, and NK-specific genes. Similar results are observed in our ORA data, where there is an enrichment of immune-related pathways, particularly leukocyte activation pathways, which confirms the results found by the authors of the original paper [@shah2024transcriptomic]. However, the genes upregulated in the no-rejection dataset do not show enrichment in biological process gene set in the `GO:BP` dataset, and instead are enriched in several `GO:MF` molecular function gene sets which could shed light on the resting-state programs that are downregulated upon caABMR.  
 
 ## References
 
