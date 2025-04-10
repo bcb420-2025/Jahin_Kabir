@@ -1,0 +1,23 @@
+producer_class	xtools.gsea.GseaPreranked
+producer_timestamp	1743575574567
+param	rpt_label	caABMR_vs_NonRejection
+param	rnd_seed	12345
+param	set_min	5
+param	zip_report	false
+param	create_svgs	false
+param	scoring_scheme	weighted
+param	rnk	/home/rstudio/projects/Course_Project/Data/Processed/ranked_genes.rnk
+param	norm	meandiv
+param	out	/home/rstudio/projects/Course_Project/Data/Processed/GSEA
+param	mode	Max_probe
+param	include_only_symbols	true
+param	help	false
+param	set_max	200
+param	gmx	Data/wikipathways-20250310-gmt-Homo_sapiens-symbols.gmt
+param	make_sets	true
+param	plot_top_x	20
+param	gui	false
+param	nperm	1000
+param	collapse	No_Collapse
+
+file	Data/Processed/GSEA/caABMR_vs_NonRejection.GseaPreranked.1743575574567/index.html
