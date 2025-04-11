@@ -61,11 +61,14 @@ Non-thresholded pathway analysis allows us to analyze gene expression data witho
 
 
 ```{r echo=FALSE, message=FALSE, warning=FALSE}
-BiocManager::install("org.Hs.eg.db")
-library("org.Hs.eg.db")
+# BiocManager::install("org.Hs.eg.db")
+# library("org.Hs.eg.db")
 ```
 
-```{r echo=FALSE, results='hide'}
+
+Note: My Quercus submission had the code block below run with eval=TRUE, but installing the `org.Hs.eg.db` package is resulting in compilation errors and I have therefore chosen to not run this code so the notebook compiles. I am still keeping the code in to show how I mapped gene names from Entrez ID to HUGO Symbol.
+
+```{r echo=FALSE, results='hide', eval=FALSE}
 # Converting WikiPathways Gene IDs from Entrez ID to HUGO Symbol
 
 # biomaRt::useDataset("hsapiens_gene_ensembl", useMart("ensembl")) # - Didn't end up using this method
